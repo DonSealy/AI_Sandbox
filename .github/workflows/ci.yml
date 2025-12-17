@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Cache NPM
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ matrix.node-version }}-
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm run test
+
+  docker-build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image (with cache)
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: false
+          tags: ai-sandbox-action-resolver:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Determine GHCR tags
+        id: ghcr_tags
+        run: |
+          REF=${GITHUB_REF}
+          SHA=${GITHUB_SHA::8}
+          OWNER=${GITHUB_REPOSITORY_OWNER}
+          IMAGE=ghcr.io/${OWNER}/ai-sandbox-action-resolver
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "${IMAGE}:latest" >> $GITHUB_OUTPUT
+          echo "${IMAGE}:${SHA}" >> $GITHUB_OUTPUT
+          if [[ "$REF" == refs/tags/* ]]; then
+            VERSION=${REF#refs/tags/}
+            echo "${IMAGE}:${VERSION}" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push image to GHCR
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ghcr_tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Determine Docker Hub tags
+        if: secrets.DOCKERHUB_USERNAME
+        id: dockerhub_tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          REF=${GITHUB_REF}
+          SHA=${GITHUB_SHA::8}
+          IMAGE=${DOCKERHUB_USERNAME}/ai-sandbox-action-resolver
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "${IMAGE}:latest" >> $GITHUB_OUTPUT
+          echo "${IMAGE}:${SHA}" >> $GITHUB_OUTPUT
+          if [[ "$REF" == refs/tags/* ]]; then
+            VERSION=${REF#refs/tags/}
+            echo "${IMAGE}:${VERSION}" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Publish to Docker Hub (optional)
+        if: secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN
+        uses: docker/login-action@v2
+        with:
+          registry: https://index.docker.io/v1/
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push to Docker Hub (optional)
+        if: secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.dockerhub_tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-ecr:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && secrets.AWS_ACCESS_KEY_ID && secrets.AWS_SECRET_ACCESS_KEY && secrets.AWS_ACCOUNT_ID
+    needs: docker-build
+    runs-on: ubuntu-latest
+    env:
+      ECR_REPO: ai-sandbox-action-resolver
+      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION || 'us-east-1' }}.amazonaws.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          set -e
+          if ! aws ecr describe-repositories --repository-names "$ECR_REPO" >/dev/null 2>&1; then
+            aws ecr create-repository --repository-name "$ECR_REPO"
+          fi
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Determine ECR tags
+        id: ecr_tags
+        run: |
+          REF=${GITHUB_REF}
+          SHA=${GITHUB_SHA::8}
+          REG=${ECR_REGISTRY}
+          REPO=${ECR_REPO}
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "${REG}/${REPO}:latest" >> $GITHUB_OUTPUT
+          echo "${REG}/${REPO}:${SHA}" >> $GITHUB_OUTPUT
+          if [[ "$REF" == refs/tags/* ]]; then
+            VERSION=${REF#refs/tags/}
+            echo "${REG}/${REPO}:${VERSION}" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push to ECR
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr_tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

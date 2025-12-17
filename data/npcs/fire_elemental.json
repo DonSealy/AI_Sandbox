@@ -1,0 +1,11 @@
+{
+  "id": "npc_003",
+  "name": "Fire Elemental",
+  "version": "1.0",
+  "provenance": {"source":"monsters","created_by":"designer","created_at":"2025-12-17T00:00:00Z"},
+  "attributes": {"STR":14,"DEX":12,"CON":16,"INT":6,"WIS":10,"CHA":8},
+  "skills": {"intimidation":2},
+  "resistances": {"fire":75,"cold":-25},
+  "temporary_modifiers": [],
+  "tags": ["elemental","hostile"]
+}

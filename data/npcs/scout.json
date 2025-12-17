@@ -1,0 +1,11 @@
+{
+  "id": "npc_002",
+  "name": "Forest Scout",
+  "version": "1.0",
+  "provenance": {"source":"starter_pack","created_by":"designer","created_at":"2025-12-17T00:00:00Z"},
+  "attributes": {"STR":10,"DEX":15,"CON":11,"INT":12,"WIS":13,"CHA":10},
+  "skills": {"stealth":5,"perception":4,"survival":3},
+  "resistances": {},
+  "temporary_modifiers": [{"target":"stealth","value":2,"expires_at":null,"source":"bushes"}],
+  "tags": ["humanoid","scout"]
+}
