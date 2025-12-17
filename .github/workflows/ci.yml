@@ -1,11 +1,14 @@
+---
 name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches:
+      - master
   pull_request:
-    branches: [ master ]
-  workflow_dispatch: {}
+    branches:
+      - master
+  workflow_dispatch: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -90,7 +93,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Determine Docker Hub tags
-        if: secrets.DOCKERHUB_USERNAME
+        if: ${{ secrets.DOCKERHUB_USERNAME }}
         id: dockerhub_tags
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
